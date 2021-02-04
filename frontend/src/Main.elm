@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 import Browser
-import Graph exposing (basic, convertPoints, viewGraph)
+import Graph exposing (convertPoints, viewGraph)
 import Html exposing (..)
 import Html.Attributes exposing (type_, value)
 import Html.Events exposing (on, onClick, onInput, targetValue)
@@ -96,6 +96,27 @@ initOptions =
     }
 
 
+getMinMax list =
+    let
+        max =
+            case List.maximum list of
+                Just val ->
+                    val + 0.1
+
+                Nothing ->
+                    1
+
+        min =
+            case List.minimum list of
+                Just val ->
+                    val
+
+                Nothing ->
+                    0
+    in
+    ( min, max )
+
+
 
 -- UPDATE
 
@@ -116,8 +137,8 @@ update msg ({ options } as model) =
         IncrementedGridCoef ->
             let
                 newVal =
-                    if options.gridPointsCoefficent + 1 > 10 then
-                        10
+                    if options.gridPointsCoefficent + 1 > 16 then
+                        16
 
                     else
                         options.gridPointsCoefficent + 1
@@ -142,8 +163,8 @@ update msg ({ options } as model) =
         IncEpsCoef ->
             let
                 newVal =
-                    if options.epsilionCoef + 1 > 10 then
-                        10
+                    if options.epsilionCoef + 1 > 16 then
+                        16
 
                     else
                         options.epsilionCoef + 1
@@ -240,18 +261,25 @@ optionsEncode options =
 
 view : Model -> Html.Html Msg
 view model =
-    case model.state of
-        Ready ->
-            viewUnloaded model
+    div []
+        [ viewUnloaded model
+        , case model.state of
+            Ready ->
+                viewUnloadedGraph
 
-        Loading ->
-            viewUnloaded model
+            Loading ->
+                viewUnloadedGraph
 
-        Loaded data ->
-            viewGraph <| basic (convertPoints data.fValsX data.fValsY)
+            Loaded data ->
+                viewGraph <| ( convertPoints data.fValsX data.fValsY, getMinMax data.fValsX, getMinMax data.fValsY )
 
-        Errored _ ->
-            viewUnloaded model
+            Errored _ ->
+                viewUnloadedGraph
+        ]
+
+
+viewUnloadedGraph =
+    div [] [ text "Graph is not loaded yet" ]
 
 
 viewUnloaded : Model -> Html.Html Msg
