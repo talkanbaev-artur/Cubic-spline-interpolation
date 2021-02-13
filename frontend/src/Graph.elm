@@ -3,7 +3,7 @@ module Graph exposing (convertPoints, viewGraph)
 import Axis
 import Color exposing (Color)
 import Html
-import Html.Attributes exposing (class)
+import Html.Attributes exposing (class, list)
 import Path exposing (Path)
 import Scale exposing (ContinuousScale)
 import Scale.Color
@@ -50,20 +50,27 @@ type alias Curve =
     List ( Float, Float ) -> SubPath
 
 
-drawCurve : ( List ( Float, Float ), ( Float, Float ), ( Float, Float ) ) -> Html.Html msg
-drawCurve ( points, xminmax, yminmax ) =
-    List.map Just (preparedPoints (xScale xminmax) (yScale yminmax) points)
+drawCurve : ( Float, Float ) -> ( Float, Float ) -> ( List ( Float, Float ), Color ) -> Html.Html msg
+drawCurve xBounds yBounds ( data, clr ) =
+    List.map Just (preparedPoints (xScale xBounds) (yScale yBounds) data)
         |> Shape.line Shape.linearCurve
-        |> (\path -> Path.element path [ stroke (Paint Color.black), fill PaintNone, strokeWidth 2 ])
+        |> (\path -> Path.element path [ stroke (Paint clr), fill PaintNone, strokeWidth 1 ])
 
 
-viewGraph : ( List ( Float, Float ), ( Float, Float ), ( Float, Float ) ) -> Html.Html msg
-viewGraph ( points, x, y ) =
+viewGraph : List ( List ( Float, Float ), Color ) -> ( Float, Float ) -> Html.Html msg
+viewGraph points_data bounds =
+    let
+        y_bounds =
+            points_data
+                |> List.map Tuple.first
+                |> getOnRange bounds
+                |> getMinMax
+    in
     Html.div []
         [ svg [ viewBox 0 0 w h ]
-            [ g [ transform [ Translate padding 0 ] ] [ Axis.left [ Axis.tickCount 10 ] <| yScale y ]
-            , g [ transform [ Translate 0 <| h - padding ] ] [ Axis.bottom [ Axis.tickCount 10 ] <| xScale x ]
-            , g [] [ drawCurve ( points, x, y ) ]
+            [ g [ transform [ Translate padding 0 ] ] [ Axis.left [ Axis.tickCount 10 ] <| yScale y_bounds ]
+            , g [ transform [ Translate 0 <| h - padding ] ] [ Axis.bottom [ Axis.tickCount 10 ] <| xScale bounds ]
+            , g [] <| List.map (\data -> drawCurve bounds y_bounds data) points_data
             ]
         ]
 
@@ -71,3 +78,51 @@ viewGraph ( points, x, y ) =
 convertPoints : List Float -> List Float -> List ( Float, Float )
 convertPoints xs ys =
     List.map2 Tuple.pair xs ys
+
+
+getMinMax : List (List ( Float, Float )) -> ( Float, Float )
+getMinMax list =
+    let
+        max l =
+            case List.maximum (List.map Tuple.second l) of
+                Just val ->
+                    val + 0.1
+
+                Nothing ->
+                    1
+
+        min l =
+            case List.minimum (List.map Tuple.second l) of
+                Just val ->
+                    val
+
+                Nothing ->
+                    0
+
+        mins =
+            case List.minimum (List.map min list) of
+                Just val ->
+                    val
+
+                Nothing ->
+                    0
+
+        maxs =
+            case List.maximum (List.map max list) of
+                Just val ->
+                    val + 0.01
+
+                Nothing ->
+                    9
+    in
+    ( mins, maxs )
+
+
+getOnRange : ( Float, Float ) -> List (List ( Float, Float )) -> List (List ( Float, Float ))
+getOnRange boundries lists =
+    let
+        filt : List ( Float, Float ) -> List ( Float, Float )
+        filt list =
+            List.filter (\x -> Tuple.first x >= Tuple.first boundries && Tuple.first x <= Tuple.second boundries) list
+    in
+    List.map filt lists

@@ -61,11 +61,18 @@ type friendlyDouble float64
 type splineDataOutput struct {
 	InitialFuncX []float64        `json:"f_x"`
 	InitialFuncY []friendlyDouble `json:"f_h"`
-	EvalX        []float64        `json:"S_x"`
-	EvalY        []friendlyDouble `json:"S_y"`
+	FirstDer     splineData       `json:"first_spline"`
+	SecondDer    splineData       `json:"second_spline"`
+}
+
+type splineData struct {
+	EvalX []float64        `json:"x"`
+	EvalY []friendlyDouble `json:"y"`
+	Err   float64          `json:"err"`
 }
 
 func splineHandler(w http.ResponseWriter, r *http.Request) {
+	//decode
 	var inp splineDataInput
 	err := json.NewDecoder(r.Body).Decode(&inp)
 	if err != nil {
@@ -73,33 +80,44 @@ func splineHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Unable to parse json request", http.StatusBadRequest)
 		return
 	}
-	function := parseFunctionArgument(inp.Function, inp.Epsilion)
 	var out splineDataOutput
 	var tempDouble []float64
-	out.InitialFuncX, tempDouble = algorithm.EvaluatePureFunction(function, inp.DataPointsNum)
+
+	//get specified function
+	builder := algorithm.NewFunctionBuilder(inp.Function, inp.Epsilion)
+	//calculate values
+	out.InitialFuncX, tempDouble = algorithm.EvaluatePureFunction(builder.GetFunc(), 10000)
 	out.InitialFuncY = friendlyfyFloat64(tempDouble)
+
+	//build second der spline
+	secF0, secF1 := builder.GetSecondDer()
+	splineSecondDer, _ := algorithm.NewSplineWithPrecacl(builder.GetFunc(), inp.DataPointsNum, algorithm.SecondDerivative, secF0, secF1)
+	tempDouble2 := splineSecondDer.OnRange(out.InitialFuncX)
+	out.SecondDer = splineData{EvalX: out.InitialFuncX, EvalY: friendlyfyFloat64(tempDouble2)}
+
+	//build first der spline
+	firF0, firF1 := builder.GetFirstDer()
+	splineFirst, _ := algorithm.NewSplineWithPrecacl(builder.GetFunc(), inp.DataPointsNum, algorithm.FirstDerivative, firF0, firF1)
+	tempDouble2 = splineFirst.OnRange(out.InitialFuncX)
+	out.FirstDer = splineData{EvalX: out.InitialFuncX, EvalY: friendlyfyFloat64(tempDouble2)}
+
+	//calc err
+	var errF = make([]float64, len(tempDouble))
+	var max float64
+	for i := 0; i < len(tempDouble); i++ {
+		errF[i] = math.Abs(tempDouble[i] - tempDouble2[i])
+		if errF[i] > max {
+			max = errF[i]
+		}
+	}
+	out.SecondDer.Err = max
+	log.Printf("Max err:%f", max)
+	// encode
 	w.Header().Set("Content-Type", "application/json")
 	err = json.NewEncoder(w).Encode(out)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
-	}
-}
-
-func parseFunctionArgument(f string, eps float64) func(x float64) float64 {
-	b := algorithm.NewFunctionBuilder()
-	switch f {
-	case "first":
-		return b.FirstFunction(eps)
-	case "second":
-		return b.SecondFunction(eps)
-	case "delta":
-		return b.DeltaRegularistaion(eps)
-	case "smooth":
-		return b.SmoothStep(eps)
-	default:
-		log.Println("Unknown function requested. Returning the default function")
-		return b.FirstFunction(eps)
 	}
 }
 

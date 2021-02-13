@@ -1,13 +1,17 @@
 module Main exposing (main)
 
 import Browser
+import Color
+import Css exposing (..)
+import DoubleSlider
 import Graph exposing (convertPoints, viewGraph)
-import Html exposing (..)
-import Html.Attributes exposing (type_, value)
-import Html.Events exposing (on, onClick, onInput, targetValue)
+import Html
+import Html.Styled exposing (..)
+import Html.Styled.Attributes exposing (..)
+import Html.Styled.Events exposing (on, onClick, onInput, targetValue)
 import Http
-import Json.Decode exposing (float, list)
-import Json.Decode.Pipeline exposing (required)
+import Json.Decode exposing (Decoder, float, list)
+import Json.Decode.Pipeline as JDP exposing (required)
 import Json.Encode as Enc
 import Platform.Cmd exposing (Cmd)
 
@@ -17,7 +21,7 @@ main =
     Browser.element
         { init = \_ -> ( initModel, Cmd.none )
         , subscriptions = \_ -> Sub.none
-        , view = view
+        , view = view >> Html.Styled.toUnstyled
         , update = update
         }
 
@@ -65,18 +69,23 @@ type TestFunction
 
 
 type alias EvaluatedFunction =
-    { fValsX : List Float -- x on 1/10000 rate
-    , fValsY : List Float
+    { fVals : List ( Float, Float ) -- x on 1/10000 rate
+    , sValsDataFirstDer : SplineData -- S_3(x, f^h) for f' in M Calc
+    , sValsDataSecondDer : SplineData -- S_3(x,f^h) for f''  in M calc
+    , bounds : RangeControl
 
-    --, sValsDataSecondDer : SplineData -- S_3(x,f^h) for f''  in M calc
-    --, sValsDataFirstDer : SplineData -- S_3(x, f^h) for f' in M Calc
     --, sValsDataNormal : SplineData -- S_3(x,f^h) for M_1 = 0 and M_n = 0 (normal spline)
     }
 
 
+type alias RangeControl =
+    { slider : DoubleSlider.DoubleSlider Msg
+    , bounds : ( Float, Float )
+    }
+
+
 type alias SplineData =
-    { xVals : List Float -- x vals
-    , yVals : List Float -- f(x) vals
+    { xVals : List ( Float, Float ) -- x vals
     , err : Float -- Max Err(f) on y control grid
     }
 
@@ -96,27 +105,6 @@ initOptions =
     }
 
 
-getMinMax list =
-    let
-        max =
-            case List.maximum list of
-                Just val ->
-                    val + 0.1
-
-                Nothing ->
-                    1
-
-        min =
-            case List.minimum list of
-                Just val ->
-                    val
-
-                Nothing ->
-                    0
-    in
-    ( min, max )
-
-
 
 -- UPDATE
 
@@ -129,6 +117,8 @@ type Msg
     | ChangedFunc String
     | ClickedDraw
     | GotGraph (Result Http.Error EvaluatedFunction)
+    | SliderLowChange Float
+    | SliderHighChange Float
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -225,6 +215,42 @@ update msg ({ options } as model) =
             , Cmd.none
             )
 
+        SliderLowChange val ->
+            case model.state of
+                Loaded ({ bounds } as data) ->
+                    let
+                        newSlider =
+                            DoubleSlider.updateLowValue val data.bounds.slider
+
+                        newBounds =
+                            { bounds | slider = newSlider, bounds = Tuple.pair val <| Tuple.second data.bounds.bounds }
+
+                        newEval =
+                            { data | bounds = newBounds }
+                    in
+                    ( { model | state = Loaded newEval }, Cmd.none )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        SliderHighChange val ->
+            case model.state of
+                Loaded ({ bounds } as data) ->
+                    let
+                        newSlider =
+                            DoubleSlider.updateHighValue val bounds.slider
+
+                        newBounds =
+                            { bounds | slider = newSlider, bounds = Tuple.pair (Tuple.first bounds.bounds) val }
+
+                        newEval =
+                            { data | bounds = newBounds }
+                    in
+                    ( { model | state = Loaded newEval }, Cmd.none )
+
+                _ ->
+                    ( model, Cmd.none )
+
 
 
 -- HTTP
@@ -241,9 +267,48 @@ evaluateFuncOnServer options =
 
 graphDecoder : Json.Decode.Decoder EvaluatedFunction
 graphDecoder =
-    Json.Decode.succeed EvaluatedFunction
-        |> required "f_x" (list Json.Decode.float)
-        |> required "f_h" (list Json.Decode.float)
+    let
+        createPairVals : List Float -> List Float -> List ( Float, Float )
+        createPairVals xs ys =
+            List.map2 Tuple.pair xs ys
+
+        slider =
+            { slider =
+                DoubleSlider.init
+                    { min = 0
+                    , max = 1
+                    , lowValue = 0
+                    , highValue = 1
+                    , step = 0.05
+                    , onLowChange = SliderLowChange
+                    , onHighChange = SliderHighChange
+                    }
+            , bounds = ( 0.0, 1.0 )
+            }
+
+        toDecoder : List Float -> List Float -> SplineData -> SplineData -> Decoder EvaluatedFunction
+        toDecoder f_x f_y firstDev secondDer =
+            Json.Decode.succeed (EvaluatedFunction (createPairVals f_x f_y) firstDev secondDer slider)
+    in
+    Json.Decode.succeed toDecoder
+        |> JDP.required "f_x" (Json.Decode.list Json.Decode.float)
+        |> JDP.required "f_h" (Json.Decode.list Json.Decode.float)
+        |> JDP.required "first_spline" decodeSplineJSON
+        |> JDP.required "second_spline" decodeSplineJSON
+        |> JDP.resolve
+
+
+decodeSplineJSON =
+    let
+        toDecoderSplineData : List Float -> List Float -> Float -> Decoder SplineData
+        toDecoderSplineData xs ys err =
+            Json.Decode.succeed (SplineData (List.map2 Tuple.pair xs ys) err)
+    in
+    Json.Decode.succeed toDecoderSplineData
+        |> JDP.required "x" (Json.Decode.list Json.Decode.float)
+        |> JDP.required "y" (Json.Decode.list Json.Decode.float)
+        |> JDP.required "err" Json.Decode.float
+        |> JDP.resolve
 
 
 optionsEncode : RequestOptions -> Enc.Value
@@ -259,9 +324,16 @@ optionsEncode options =
 -- VIEW
 
 
-view : Model -> Html.Html Msg
+view : Model -> Html Msg
 view model =
-    div []
+    div
+        [ css
+            [ displayFlex
+            , minHeight (vh 100)
+            , backgroundColor
+                (rgb 240 240 240)
+            ]
+        ]
         [ viewUnloaded model
         , case model.state of
             Ready ->
@@ -271,32 +343,76 @@ view model =
                 viewUnloadedGraph
 
             Loaded data ->
-                viewGraph <| ( convertPoints data.fValsX data.fValsY, getMinMax data.fValsX, getMinMax data.fValsY )
+                div
+                    [ css
+                        [ flexGrow (num 5)
+                        , margin auto
+                        ]
+                    ]
+                    [ p [ css [ padding (rem 1) ] ] [ text <| "The error is: " ++ String.fromFloat data.sValsDataSecondDer.err ]
+                    , Html.Styled.fromUnstyled (viewGraph (renderData data) data.bounds.bounds)
+                    , div [ css [ padding2 (rem 0) (rem 1) ] ] [ Html.Styled.fromUnstyled <| DoubleSlider.view data.bounds.slider ]
+                    ]
 
             Errored _ ->
                 viewUnloadedGraph
         ]
 
 
+renderData : EvaluatedFunction -> List ( List ( Float, Float ), Color.Color )
+renderData data =
+    [ ( data.sValsDataFirstDer.xVals, Color.black )
+    , ( data.sValsDataSecondDer.xVals, Color.blue )
+    , ( data.fVals, Color.red )
+    ]
+
+
 viewUnloadedGraph =
-    div [] [ text "Graph is not loaded yet" ]
+    div
+        [ css
+            [ displayFlex
+            , margin auto
+            ]
+        ]
+        [ p
+            [ css
+                [ fontSize (px 36)
+                ]
+            ]
+            [ text "Graph is not loaded yet" ]
+        ]
 
 
-viewUnloaded : Model -> Html.Html Msg
+viewUnloaded : Model -> Html Msg
 viewUnloaded model =
-    div []
-        [ h1 []
-            [ text "Cubic spline interpolation calculator new" ]
-        , div []
-            [ p [] [ text <| String.fromInt model.options.gridPointsCoefficent ]
-            , p [] [ text <| String.fromInt model.options.epsilionCoef ]
-            , p [] [ text <| funcToString model.options.function ]
+    div
+        [ css
+            [ padding (rem 1)
+            , borderRight3 (px 1) solid (rgb 200 200 200)
+            ]
+        ]
+        [ h1
+            [ css
+                [ fontSize (px 20)
+                ]
+            ]
+            [ text "Cubic spline interpolation calculator" ]
+        , div
+            [ css [ margin auto, displayFlex, flexDirection column, padding2 (px 0) (rem 0.75) ]
+            ]
+            [ p [] [ text <| "Number of points: 1 + 2", sup [] [ text <| String.fromInt model.options.gridPointsCoefficent ], text <| " = " ++ (String.fromInt <| 1 + 2 ^ model.options.gridPointsCoefficent) ]
+            , p [] [ text <| "The epsilon value is: 2", sup [] [ text <| String.fromInt (negate model.options.epsilionCoef) ], text <| " = " ++ (String.fromFloat <| 2.0 ^ (toFloat <| negate model.options.epsilionCoef)) ]
             ]
         , div []
-            [ div [] [ button [ onClick IncrementedGridCoef ] [ text "+" ], text "Grid handler", button [ onClick DecrementedGridCoef ] [ text "-" ] ]
-            , div [] [ button [ onClick IncEpsCoef ] [ text "+" ], text "Eps handler", button [ onClick DecEpsCoef ] [ text "-" ] ]
+            [ viewPlusMinController DecrementedGridCoef "Grid handler" IncrementedGridCoef
+            , viewPlusMinController DecEpsCoef "Epsilon handler" IncEpsCoef
             , div []
-                [ select [ onChangeSelect ChangedFunc ]
+                [ select
+                    [ onChangeSelect ChangedFunc
+                    , css
+                        [ margin (px 10)
+                        ]
+                    ]
                     [ viewFuncOption FirstTest
                     , viewFuncOption SecondTest
                     , viewFuncOption DeltaRegTest
@@ -304,8 +420,12 @@ viewUnloaded model =
                     , viewFuncOption PersonalTest
                     ]
                 ]
-            , div []
-                [ button [ onClick ClickedDraw ] [ text "Draw" ]
+            , div [ css [ padding (rem 0.75) ] ]
+                [ button
+                    [ onClick ClickedDraw
+                    , css [ padding (rem 0.5), backgroundColor (rgb 200 200 200), borderRadius (rem 0.25), borderStyle solid, border (px 2) ]
+                    ]
+                    [ text "Draw" ]
                 ]
             ]
         ]
@@ -359,3 +479,18 @@ viewFuncOption f =
 onChangeSelect : (String -> msg) -> Attribute msg
 onChangeSelect msg =
     on "change" <| Json.Decode.map msg targetValue
+
+
+viewPlusMinController decmsg cntName incmsg =
+    div
+        [ css
+            [ padding2 (rem 0.5) (rem 0.75)
+            , margin auto
+            , displayFlex
+            , justifyContent spaceBetween
+            ]
+        ]
+        [ button [ onClick decmsg ] [ text "-" ]
+        , text cntName
+        , button [ onClick incmsg ] [ text "+" ]
+        ]
