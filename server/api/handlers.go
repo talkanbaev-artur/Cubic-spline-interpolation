@@ -63,6 +63,7 @@ type splineDataOutput struct {
 	InitialFuncY []friendlyDouble `json:"f_h"`
 	FirstDer     splineData       `json:"first_spline"`
 	SecondDer    splineData       `json:"second_spline"`
+	NormalSpline splineData       `json:"normal_spline"`
 }
 
 type splineData struct {
@@ -81,37 +82,38 @@ func splineHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var out splineDataOutput
-	var tempDouble []float64
+	var originalVals []float64
 
 	//get specified function
 	builder := algorithm.NewFunctionBuilder(inp.Function, inp.Epsilion)
 	//calculate values
-	out.InitialFuncX, tempDouble = algorithm.EvaluatePureFunction(builder.GetFunc(), 10000)
-	out.InitialFuncY = friendlyfyFloat64(tempDouble)
+	out.InitialFuncX, originalVals = algorithm.EvaluatePureFunction(builder.GetFunc(), 10001)
+	out.InitialFuncY = friendlyfyFloat64(originalVals)
 
+	var tempDouble2 []float64
 	//build second der spline
 	secF0, secF1 := builder.GetSecondDer()
 	splineSecondDer, _ := algorithm.NewSplineWithPrecacl(builder.GetFunc(), inp.DataPointsNum, algorithm.SecondDerivative, secF0, secF1)
-	tempDouble2 := splineSecondDer.OnRange(out.InitialFuncX)
+	tempDouble2 = splineSecondDer.OnRange(out.InitialFuncX)
 	out.SecondDer = splineData{EvalX: out.InitialFuncX, EvalY: friendlyfyFloat64(tempDouble2)}
+	out.SecondDer.Err = calculateError(builder.GetFunc(), splineSecondDer, inp.DataPointsNum)
+	//log.Printf("%f : %f", 0.25, splineSecondDer.Eval(0.25))
 
+	var tempDouble3 []float64
 	//build first der spline
 	firF0, firF1 := builder.GetFirstDer()
 	splineFirst, _ := algorithm.NewSplineWithPrecacl(builder.GetFunc(), inp.DataPointsNum, algorithm.FirstDerivative, firF0, firF1)
-	tempDouble2 = splineFirst.OnRange(out.InitialFuncX)
-	out.FirstDer = splineData{EvalX: out.InitialFuncX, EvalY: friendlyfyFloat64(tempDouble2)}
+	tempDouble3 = splineFirst.OnRange(out.InitialFuncX)
+	out.FirstDer = splineData{EvalX: out.InitialFuncX, EvalY: friendlyfyFloat64(tempDouble3)}
+	out.FirstDer.Err = calculateError(builder.GetFunc(), splineFirst, inp.DataPointsNum)
 
-	//calc err
-	var errF = make([]float64, len(tempDouble))
-	var max float64
-	for i := 0; i < len(tempDouble); i++ {
-		errF[i] = math.Abs(tempDouble[i] - tempDouble2[i])
-		if errF[i] > max {
-			max = errF[i]
-		}
-	}
-	out.SecondDer.Err = max
-	log.Printf("Max err:%f", max)
+	var tempDouble4 []float64
+	//normal spline
+	splineNormal, _ := algorithm.NewSplineWithPrecacl(builder.GetFunc(), inp.DataPointsNum, algorithm.NormalSpline, 0, 0)
+	tempDouble4 = splineNormal.OnRange(out.InitialFuncX)
+	out.NormalSpline = splineData{EvalX: out.InitialFuncX, EvalY: friendlyfyFloat64(tempDouble4)}
+	out.NormalSpline.Err = calculateError(builder.GetFunc(), splineNormal, inp.DataPointsNum)
+
 	// encode
 	w.Header().Set("Content-Type", "application/json")
 	err = json.NewEncoder(w).Encode(out)
@@ -142,4 +144,21 @@ func friendlyfyFloat64(l []float64) []friendlyDouble {
 		res[i] = friendlyDouble(v)
 	}
 	return res
+}
+
+func calculateError(f func(float64) float64, s *algorithm.Spline, n int) float64 {
+	ys := make([]float64, n-1)
+	var h float64 = 1.0 / float64(n-1)
+	for i := 0; i < n-1; i++ {
+		in := float64(i)
+		ys[i] = (in*h + (in+1)*h) / 2
+	}
+	var max float64
+	for _, y := range ys {
+		err := math.Abs(f(y) - s.Eval(y))
+		if err > max {
+			max = err
+		}
+	}
+	return max
 }

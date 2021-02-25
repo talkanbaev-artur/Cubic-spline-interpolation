@@ -72,9 +72,8 @@ type alias EvaluatedFunction =
     { fVals : List ( Float, Float ) -- x on 1/10000 rate
     , sValsDataFirstDer : SplineData -- S_3(x, f^h) for f' in M Calc
     , sValsDataSecondDer : SplineData -- S_3(x,f^h) for f''  in M calc
+    , sValsDataNormal : SplineData -- S_3(x,f^h) for M_1 = 0 and M_n = 0 (normal spline)
     , bounds : RangeControl
-
-    --, sValsDataNormal : SplineData -- S_3(x,f^h) for M_1 = 0 and M_n = 0 (normal spline)
     }
 
 
@@ -134,7 +133,7 @@ update msg ({ options } as model) =
                         options.gridPointsCoefficent + 1
             in
             ( { model | options = { options | gridPointsCoefficent = newVal } }
-            , Cmd.none
+            , evaluateFuncOnServer { options | gridPointsCoefficent = newVal }
             )
 
         DecrementedGridCoef ->
@@ -147,7 +146,7 @@ update msg ({ options } as model) =
                         options.gridPointsCoefficent - 1
             in
             ( { model | options = { options | gridPointsCoefficent = newVal } }
-            , Cmd.none
+            , evaluateFuncOnServer { options | gridPointsCoefficent = newVal }
             )
 
         IncEpsCoef ->
@@ -160,7 +159,7 @@ update msg ({ options } as model) =
                         options.epsilionCoef + 1
             in
             ( { model | options = { options | epsilionCoef = newVal } }
-            , Cmd.none
+            , evaluateFuncOnServer { options | epsilionCoef = newVal }
             )
 
         DecEpsCoef ->
@@ -173,7 +172,7 @@ update msg ({ options } as model) =
                         options.epsilionCoef - 1
             in
             ( { model | options = { options | epsilionCoef = newVal } }
-            , Cmd.none
+            , evaluateFuncOnServer { options | epsilionCoef = newVal }
             )
 
         ChangedFunc f ->
@@ -199,7 +198,7 @@ update msg ({ options } as model) =
                             FirstTest
             in
             ( { model | options = { options | function = newFunction } }
-            , Cmd.none
+            , evaluateFuncOnServer { options | function = newFunction }
             )
 
         ClickedDraw ->
@@ -286,15 +285,16 @@ graphDecoder =
             , bounds = ( 0.0, 1.0 )
             }
 
-        toDecoder : List Float -> List Float -> SplineData -> SplineData -> Decoder EvaluatedFunction
-        toDecoder f_x f_y firstDev secondDer =
-            Json.Decode.succeed (EvaluatedFunction (createPairVals f_x f_y) firstDev secondDer slider)
+        toDecoder : List Float -> List Float -> SplineData -> SplineData -> SplineData -> Decoder EvaluatedFunction
+        toDecoder f_x f_y firstDev secondDer normalSpline =
+            Json.Decode.succeed (EvaluatedFunction (createPairVals f_x f_y) firstDev secondDer normalSpline slider)
     in
     Json.Decode.succeed toDecoder
         |> JDP.required "f_x" (Json.Decode.list Json.Decode.float)
         |> JDP.required "f_h" (Json.Decode.list Json.Decode.float)
         |> JDP.required "first_spline" decodeSplineJSON
         |> JDP.required "second_spline" decodeSplineJSON
+        |> JDP.required "normal_spline" decodeSplineJSON
         |> JDP.resolve
 
 
@@ -349,7 +349,11 @@ view model =
                         , margin auto
                         ]
                     ]
-                    [ p [ css [ padding (rem 1) ] ] [ text <| "The error is: " ++ String.fromFloat data.sValsDataSecondDer.err ]
+                    [ div [ css [ padding2 (rem 0.2) (rem 1) ] ]
+                        [ div [ css [ padding2 (rem 0.15) (rem 0), displayFlex ] ] [ renderColorOfFunc (rgb 0 0 240), text <| "Second deritvative spline. Err: " ++ String.fromFloat data.sValsDataSecondDer.err ]
+                        , div [ css [ padding2 (rem 0.15) (rem 0), displayFlex ] ] [ renderColorOfFunc (rgb 0 0 0), text <| "First derivative spline. Err: " ++ String.fromFloat data.sValsDataFirstDer.err ]
+                        , div [ css [ padding2 (rem 0.15) (rem 0), displayFlex ] ] [ renderColorOfFunc (rgb 10 240 10), text <| "Normal spline. Err: " ++ String.fromFloat data.sValsDataNormal.err ]
+                        ]
                     , Html.Styled.fromUnstyled (viewGraph (renderData data) data.bounds.bounds)
                     , div [ css [ padding2 (rem 0) (rem 1) ] ] [ Html.Styled.fromUnstyled <| DoubleSlider.view data.bounds.slider ]
                     ]
@@ -359,9 +363,14 @@ view model =
         ]
 
 
+renderColorOfFunc color =
+    div [ css [ padding (rem 0.4), margin (rem 0.05), backgroundColor color ] ] []
+
+
 renderData : EvaluatedFunction -> List ( List ( Float, Float ), Color.Color )
 renderData data =
     [ ( data.sValsDataFirstDer.xVals, Color.black )
+    , ( data.sValsDataNormal.xVals, Color.green )
     , ( data.sValsDataSecondDer.xVals, Color.blue )
     , ( data.fVals, Color.red )
     ]

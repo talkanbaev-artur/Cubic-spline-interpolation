@@ -63,6 +63,16 @@ func (b functionBuilder) deltaRegularistaion(eps float64) pureFunction {
 	}
 }
 
+func (b functionBuilder) deltaFirstDerivative(eps float64) (float64, float64) {
+	f0 := (4 * eps) / math.Pow(eps+1, 2)
+	return f0, -f0
+}
+
+func (b functionBuilder) deltaSecondDerivative(eps float64) (float64, float64) {
+	der := -(8 * (eps - 3) * eps) / math.Pow(eps+1, 3)
+	return der, der
+}
+
 func (b functionBuilder) smoothStep(eps float64) pureFunction {
 	return func(x float64) float64 {
 		if x <= 0.5 {
@@ -72,6 +82,35 @@ func (b functionBuilder) smoothStep(eps float64) pureFunction {
 		val := math.Exp((1 - 2*x) / eps)
 		return -2 * (1 - val) / (3 * (1 + val))
 	}
+}
+
+func (b functionBuilder) smoothFirstDer(eps float64) (float64, float64) {
+	f0 := -2 / (3 * eps * eps * (1 + math.Cosh(1/eps)))
+	return f0, -f0
+}
+
+func (b functionBuilder) smoothSecondDer(eps float64) (float64, float64) {
+	f0 := (-2 * (math.Tanh(1/(2*eps)) - 2*eps)) / (3 * math.Pow(eps, 4) * (math.Cosh(1/eps) + 1))
+	f1 := (math.Tanh(1/(2*eps)) - 2*eps) * math.Pow(1/math.Cosh(1/(2*eps)), 2) / (3 * math.Pow(eps, 4))
+	return f0, f1
+}
+
+func (b functionBuilder) customFunction(eps float64) pureFunction {
+	return func(x float64) float64 {
+		ch := math.Exp(x - 1)
+		return (1-math.Pow(eps, 0.5)/ch)/(1+math.Exp(-16*(x-0.5))) + math.Pow(eps, 0.5)/ch*(math.Pow(x-0.5, 3)/(eps*eps*x+0.5))
+	}
+}
+
+func (b functionBuilder) customFirstDer(eps float64) (float64, float64) {
+	f0 := -0.340241 / math.Sqrt(eps)
+	f1 := -(4 * (0.0937081 + 0.687333*math.Pow(eps, 2) + 0.499833*math.Pow(eps, 4))) / (math.Sqrt(eps) * math.Pow(1+2*math.Pow(eps, 2), 2))
+	return f0, f1
+}
+
+func (b functionBuilder) customSecondDer(eps float64) (float64, float64) {
+	f0 := -0.170121 / math.Pow(eps, 1.5)
+	return f0, 0
 }
 
 func generateSplineDataPoints(numberOfPoints int) []float64 {
@@ -86,10 +125,10 @@ func generateSplineDataPoints(numberOfPoints int) []float64 {
 type pureFunction func(x float64) float64
 
 func EvaluatePureFunction(f pureFunction, n int) (xs []float64, fH []float64) {
-	var step float64 = 1.0 / float64(n)
-	for i := 0.0; i <= 1.0; i += step {
-		fH = append(fH, f(i))
-		xs = append(xs, i)
+	var step float64 = 1.0 / float64(n-1)
+	for i := 0; i < n; i++ {
+		fH = append(fH, f(float64(i)*step))
+		xs = append(xs, float64(i)*step)
 	}
 	return
 }
@@ -101,9 +140,11 @@ func (b functionBuilder) GetFirstDer() (float64, float64) {
 	case "second":
 		return b.secondFuncFirstDer(b.eps)
 	case "delta":
-		return 0, 0
+		return b.deltaFirstDerivative(b.eps)
 	case "smooth":
-		return 0, 0
+		return b.smoothFirstDer(b.eps)
+	case "custom":
+		return b.customFirstDer(b.eps)
 	default:
 		return 0, 0
 	}
@@ -116,9 +157,11 @@ func (b functionBuilder) GetSecondDer() (float64, float64) {
 	case "second":
 		return b.secondFuncSecondDer(b.eps)
 	case "delta":
-		return 0, 0
+		return b.deltaSecondDerivative(b.eps)
 	case "smooth":
-		return 0, 0
+		return b.smoothSecondDer(b.eps)
+	case "custom":
+		return b.customSecondDer(b.eps)
 	default:
 		return 0, 0
 	}
@@ -134,6 +177,8 @@ func (b functionBuilder) GetFunc() pureFunction {
 		return b.deltaRegularistaion(b.eps)
 	case "smooth":
 		return b.smoothStep(b.eps)
+	case "custom":
+		return b.customFunction(b.eps)
 	default:
 		log.Println("Unknown function requested. Returning the default function")
 		return b.firstFunction(b.eps)
